@@ -41,3 +41,7 @@ yarn-error.log*
 
 # Misc
 *.pem
+
+# Logs
+logs/
+*.jsonl
