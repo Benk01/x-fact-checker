@@ -4,7 +4,7 @@ async function testEndpoint(postUrl, version) {
   const startTime = Date.now();
 
   try {
-    const response = await fetch(`http://localhost:3001${endpoint}`, {
+    const response = await fetch(`http://localhost:3000${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ postUrl }),

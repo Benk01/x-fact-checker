@@ -78,23 +78,47 @@ export const CLAIM_EXTRACTION_PROMPT = (postContent: string) => `Analyze this X 
 POST CONTENT:
 "${postContent}"
 
+IMPORTANT: Extract SEPARATE, NON-OVERLAPPING claims. Temporal modifiers ("X days ago", "recently") should be separate from substantive claims.
+
+CONSOLIDATION RULES:
+- Lists of names, individuals, or entities should be extracted as ONE consolidated claim, not separate claims per name
+- Example: "Nine Republicans (Fitzpatrick, Bresnahan, Kean, LaLota, Lawler, Mackenzie, Miller, Elvira-Salazar, Valadao) voted with Democrats" - NOT separate claims for each name
+- Multiple related supporting details (dates, locations, minor facts) should be grouped together when they serve the same verification purpose
+- Only extract separate claims when each requires DIFFERENT verification sources or methods
+- Err on the side of consolidation for LOW priority supporting details
+
 For each claim, determine:
-1. The exact claim text
-2. Claim type (statistical, attribution, event, date-based, or other)
-3. Priority (high=needs deep verification, medium=standard check, low=minor detail)
-4. Optimized Google search query to verify the claim
-5. Whether this claim requires reading full source articles (vs snippets)
+1. The exact claim text (standalone statement)
+2. Claim type (statistical, attribution, event, date, other)
+3. Priority (high=needs deep verification, medium=standard, low=minor)
+4. Optimized Google search query
+5. Whether full article reading is needed (vs snippets)
 
 CLAIM PRIORITIZATION GUIDELINES:
-- HIGH priority: Statistics, percentages, attributions (quotes), specific numbers, dates of events
-- MEDIUM priority: General factual statements, policy claims, historical references
-- LOW priority: Subjective interpretations, obvious facts, widely-known information
+- HIGH priority (use sparingly - typically 1-2 claims max):
+  * The PRIMARY claim or central assertion of the post
+  * Statistics or percentages that are the core of the argument
+  * Claims that directly contradict widely-established facts
+  * Scientific or technical claims that are actively disputed
+- MEDIUM priority (use sparingly - only when genuinely important):
+  * Secondary factual claims that significantly support the main argument
+  * Policy claims with substantial implications
+  * Historical references that are contentious or disputed
+- LOW priority (default for most claims):
+  * Supporting details, names, or attributions
+  * Verifiable dates and temporal references
+  * General factual statements
+  * Non-controversial statistics
+  * Obvious facts or widely-known information
+  * Attribution sources (e.g., "Punchbowl reported")
+  * Lists of names or specific individuals mentioned
 
-FULL ARTICLE READING NEEDED WHEN:
-- Claim involves statistics or specific numbers
-- Attribution/quote that needs context
-- Complex policy or scientific claims
-- Search snippets would likely be ambiguous
+FULL ARTICLE READING NEEDED WHEN (rare - most claims should be FALSE):
+- Direct quote attribution where surrounding context is critical to meaning
+- Statistical methodology claims where snippets won't show the full calculation
+- ONLY when you genuinely expect search snippets to be incomplete or misleading
+- DEFAULT to FALSE: Most claims can be verified with search snippets alone
+- Controversial or disputed claims usually DON'T need full articles - snippets from multiple sources are sufficient
 
 Output JSON format:
 {
@@ -117,14 +141,18 @@ Respond ONLY with valid JSON, no additional text.`;
 
 export const EVIDENCE_ANALYSIS_PROMPT = (
   postContent: string,
-  claims: Array<{text: string, type: string}>,
-  sources: string
+  claims: Array<{ text: string, type: string }>,
+  sources: string,
+  postTimestamp?: string,
+  isBreakingNews: boolean = false
 ) => `${SYSTEM_PROMPT}
 
 ${FEW_SHOT_EXAMPLES}
 
 POST CONTENT:
 "${postContent}"
+${postTimestamp ? `\nPOST TIMESTAMP: ${postTimestamp} (${new Date(postTimestamp).toLocaleString('en-US', { dateStyle: 'full', timeStyle: 'short' })})` : ''}
+${isBreakingNews ? '\nNOTE: This appears to be breaking/recent news. Sources may be limited as events just occurred. Adjust confidence accordingly if verification sources are sparse.' : ''}
 
 IDENTIFIED CLAIMS:
 ${claims.map((c, i) => `${i + 1}. ${c.text} (${c.type})`).join('\n')}
@@ -139,6 +167,7 @@ ANALYSIS INSTRUCTIONS:
    - Note if sources are missing/insufficient
    - Flag any claims that can't be verified
    - Be specific: "Claim X is contradicted by source Y which states Z"
+   ${postTimestamp ? '- For time-sensitive claims (e.g., "X days ago", "recently"), use the post timestamp to verify accuracy' : ''}
 
 2. SCORING RUBRIC (Be specific and cite evidence):
 
@@ -178,6 +207,12 @@ ANALYSIS INSTRUCTIONS:
    - Be concrete: "Claim 'X' is false because source Y shows Z"
    - Avoid vague statements like "lacks context" - specify what context is missing
 
+5. LOGICAL FALLACIES:
+   - Identify any logical fallacies present in the post's argumentation
+   - Common types: ad hominem, straw man, false dichotomy, slippery slope, appeal to emotion, hasty generalization, cherry picking
+   - For each fallacy: provide type, description, and quote the specific example from the post
+   - Omit this field entirely if no fallacies are detected
+
 Output JSON format:
 {
   "claimAnalysis": [
@@ -194,7 +229,14 @@ Output JSON format:
   "verdict": "Accurate|Mostly Accurate|Misleading|Mostly False|False|Unverifiable",
   "summary": "2-3 sentence assessment with source citations",
   "keyIssues": ["specific issue 1 with evidence", "specific issue 2 with evidence"],
-  "reasoning": "Your chain-of-thought explanation for the scores you assigned"
+  "reasoning": "Your chain-of-thought explanation for the scores you assigned",
+  "logicalFallacies": [
+    {
+      "type": "fallacy type (e.g., ad hominem, straw man)",
+      "description": "brief explanation of why this is a fallacy",
+      "example": "exact quote from post demonstrating the fallacy"
+    }
+  ]
 }
 
 Remember: ONLY cite sources that were provided in the EVIDENCE SOURCES section above. Never make up or hallucinate sources.

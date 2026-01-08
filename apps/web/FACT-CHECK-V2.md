@@ -50,7 +50,15 @@ Scrape → Extract Claims → Gather Sources → Analyze with Evidence → Valid
   - Chain-of-thought reasoning required
   - Explicit anti-hallucination instructions
 
-### 6. Validation Layer
+### 6. Temporal Context Awareness
+
+- **V1**: No awareness of when post was created
+- **V2**: Extracts post timestamp and provides it to AI
+  - Enables verification of time-sensitive claims ("X days ago", "recently")
+  - Helps assess whether information was current at time of posting
+  - Useful for detecting stale or outdated claims
+
+### 7. Validation Layer
 
 - **V1**: No validation, accepted all AI responses
 - **V2**: Automated validation checks:
@@ -80,6 +88,7 @@ POST /api/fact-check-v2
 {
   "postUrl": "https://x.com/...",
   "postContent": "Tweet text...",
+  "postTimestamp": "2026-01-07T18:30:45.000Z",
   "claims": [
     {
       "text": "Specific claim extracted",

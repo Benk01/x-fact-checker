@@ -39,6 +39,12 @@ export interface ClaimAnalysisResult {
   evidence: string;
 }
 
+export interface LogicalFallacy {
+  type: string;
+  description: string;
+  example: string;
+}
+
 export interface FactCheckAnalysis {
   claimAnalysis: ClaimAnalysisResult[];
   factualAccuracy: number;
@@ -49,6 +55,7 @@ export interface FactCheckAnalysis {
   summary: string;
   keyIssues: string[];
   reasoning: string;
+  logicalFallacies?: LogicalFallacy[];
 }
 
 export interface ValidationResult {
@@ -61,6 +68,7 @@ export interface ValidationResult {
 export interface FactCheckResult {
   postUrl: string;
   postContent: string;
+  postTimestamp?: string; // ISO 8601 timestamp when the post was created
   claims: Claim[];
   analysis: FactCheckAnalysis;
   sources: {
@@ -68,6 +76,6 @@ export interface FactCheckResult {
     deep: DeepSource[];
   };
   validation: ValidationResult;
-  timestamp: string;
+  timestamp: string; // ISO 8601 timestamp when the analysis was completed
   version: string; // e.g., "v2-evidence-informed"
 }

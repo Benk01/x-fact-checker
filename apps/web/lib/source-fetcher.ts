@@ -49,7 +49,7 @@ export async function fetchFullArticle(url: string): Promise<DeepSource | null> 
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
       },
-      timeout: 10000, // 10 second timeout
+      timeout: 8000, // 8 second timeout (optimized for speed)
       maxRedirects: 3,
     });
 

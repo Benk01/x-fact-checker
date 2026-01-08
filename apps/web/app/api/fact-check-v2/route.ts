@@ -21,8 +21,8 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-// Scrape X post content using Puppeteer (unchanged from v1)
-async function scrapeXPost(url: string): Promise<string> {
+// Scrape X post content and metadata using Puppeteer
+async function scrapeXPost(url: string): Promise<{ text: string; timestamp?: string }> {
   let browser;
   try {
     console.log('Launching browser...');
@@ -49,29 +49,46 @@ async function scrapeXPost(url: string): Promise<string> {
     console.log('Waiting for tweet content...');
     await page.waitForSelector('article[data-testid="tweet"]', { timeout: 10000 });
 
-    const tweetText = await page.evaluate(() => {
+    const tweetData = await page.evaluate(() => {
+      // Extract tweet text
       const tweetElement = document.querySelector('div[data-testid="tweetText"]');
-      if (tweetElement) {
-        return tweetElement.textContent || '';
-      }
+      let text = '';
 
-      const article = document.querySelector('article[data-testid="tweet"]');
-      if (article) {
-        const textDivs = article.querySelectorAll('div[lang]');
-        if (textDivs.length > 0) {
-          return textDivs[0].textContent || '';
+      if (tweetElement) {
+        text = tweetElement.textContent || '';
+      } else {
+        const article = document.querySelector('article[data-testid="tweet"]');
+        if (article) {
+          const textDivs = article.querySelectorAll('div[lang]');
+          if (textDivs.length > 0) {
+            text = textDivs[0].textContent || '';
+          }
         }
       }
 
-      return '';
+      // Extract timestamp
+      let timestamp: string | undefined;
+      const timeElement = document.querySelector('article[data-testid="tweet"] time');
+      if (timeElement) {
+        timestamp = timeElement.getAttribute('datetime') || undefined;
+      }
+
+      return { text, timestamp };
     });
 
-    if (!tweetText || tweetText.trim().length === 0) {
+    if (!tweetData.text || tweetData.text.trim().length === 0) {
       throw new Error('Could not extract tweet content. The post may be deleted, private, or unavailable.');
     }
 
-    console.log('Successfully extracted tweet:', tweetText.substring(0, 100));
-    return tweetText.trim();
+    console.log('Successfully extracted tweet:', tweetData.text.substring(0, 100));
+    if (tweetData.timestamp) {
+      console.log('Post timestamp:', tweetData.timestamp);
+    }
+
+    return {
+      text: tweetData.text.trim(),
+      timestamp: tweetData.timestamp,
+    };
 
   } catch (error) {
     if (error instanceof Error) {
@@ -126,8 +143,22 @@ async function extractClaims(postContent: string): Promise<ClaimExtractionResult
   }
 }
 
+// Detect if post indicates breaking/recent news
+function isBreakingNews(postContent: string): boolean {
+  const breakingIndicators = [
+    /\bbreaking\b/i,
+    /\bjust\s+(now|in|happened)\b/i,
+    /\b(minutes?|hours?)\s+ago\b/i,
+    /\bnow\s*[-—:]\s*/i,
+    /\balert\b/i,
+    /\bupdate\b/i,
+  ];
+
+  return breakingIndicators.some(pattern => pattern.test(postContent));
+}
+
 // STAGE 2: Gather sources (snippets + full articles for high-priority claims)
-async function gatherSources(claims: Claim[], postContent: string): Promise<{
+async function gatherSources(claims: Claim[], postContent: string, postTimestamp?: string): Promise<{
   snippets: SourceSnippet[],
   deep: DeepSource[],
 }> {
@@ -149,16 +180,34 @@ async function gatherSources(claims: Claim[], postContent: string): Promise<{
     ? claims.slice(0, 3).map(c => c.searchQuery) // Top 3 claims
     : [postContent.substring(0, 100)];
 
+  // Detect breaking news for time-filtered search
+  const isBreaking = isBreakingNews(postContent);
+
+  // Calculate date range for breaking news
+  let dateRestrict: string | undefined;
+  if (isBreaking) {
+    // For breaking news, search only last 7 days
+    dateRestrict = 'd7';
+    console.log('Breaking news detected - restricting search to last 7 days');
+  }
+
   try {
     // Perform Google searches
     for (const query of searchQueries) {
+      const searchParams: any = {
+        key: apiKey,
+        cx: searchEngineId,
+        q: query,
+        num: 5,
+        sort: isBreaking ? 'date' : undefined, // Sort by date for breaking news
+      };
+
+      if (dateRestrict) {
+        searchParams.dateRestrict = dateRestrict;
+      }
+
       const response = await axios.get('https://www.googleapis.com/customsearch/v1', {
-        params: {
-          key: apiKey,
-          cx: searchEngineId,
-          q: query,
-          num: 5,
-        },
+        params: searchParams,
         timeout: 5000,
       });
 
@@ -177,28 +226,28 @@ async function gatherSources(claims: Claim[], postContent: string): Promise<{
       index === self.findIndex(t => t.url === s.url)
     );
 
-    // Fetch full articles for high-priority claims
+    // Fetch full articles for high-priority claims (optimized: max 1 article)
     const highPriorityClaims = claims.filter(c => c.requiresFullSourceRead && c.priority === 'high');
 
-    if (highPriorityClaims.length > 0) {
-      console.log(`Fetching full articles for ${highPriorityClaims.length} high-priority claims...`);
+    if (highPriorityClaims.length > 0 && uniqueSnippets.length > 0) {
+      console.log(`Fetching full article for ${highPriorityClaims.length} high-priority claim(s)...`);
 
-      // Get top authoritative sources from snippets
-      const topSources = uniqueSnippets
-        .sort((a, b) => scoreSourceAuthority(b.url) - scoreSourceAuthority(a.url))
-        .slice(0, 2); // Top 2 most authoritative
+      // Get single most authoritative source from snippets
+      const topSource = uniqueSnippets
+        .sort((a, b) => scoreSourceAuthority(b.url) - scoreSourceAuthority(a.url))[0];
 
-      for (const source of topSources) {
-        const article = await fetchFullArticle(source.url);
-        if (article) {
-          // Extract relevant passages for each high-priority claim
-          for (const claim of highPriorityClaims) {
-            const passages = extractRelevantPassages(article, claim.text);
-            article.relevantPassages.push(...passages);
-          }
-
-          deepSources.push(article);
+      const article = await fetchFullArticle(topSource.url);
+      if (article) {
+        // Extract relevant passages for all high-priority claims
+        for (const claim of highPriorityClaims) {
+          const passages = extractRelevantPassages(article, claim.text);
+          article.relevantPassages.push(...passages);
         }
+
+        deepSources.push(article);
+        console.log(`Successfully fetched article: ${article.title}`);
+      } else {
+        console.log('Article fetch failed, continuing with snippets only');
       }
     }
 
@@ -217,7 +266,8 @@ async function gatherSources(claims: Claim[], postContent: string): Promise<{
 async function analyzeWithEvidence(
   postContent: string,
   claims: Claim[],
-  sources: { snippets: SourceSnippet[], deep: DeepSource[] }
+  sources: { snippets: SourceSnippet[], deep: DeepSource[] },
+  postTimestamp?: string
 ): Promise<{
   analysis: FactCheckAnalysis,
   tokenUsage: { input: number, output: number },
@@ -226,6 +276,7 @@ async function analyzeWithEvidence(
 
   const formattedSources = formatSourcesForPrompt(sources.snippets, sources.deep);
   const claimsForPrompt = claims.map(c => ({ text: c.text, type: c.type }));
+  const isBreaking = isBreakingNews(postContent);
 
   try {
     const message = await anthropic.messages.create({
@@ -234,7 +285,7 @@ async function analyzeWithEvidence(
       temperature: 0.2, // Low temperature for deterministic scoring
       messages: [{
         role: 'user',
-        content: EVIDENCE_ANALYSIS_PROMPT(postContent, claimsForPrompt, formattedSources),
+        content: EVIDENCE_ANALYSIS_PROMPT(postContent, claimsForPrompt, formattedSources, postTimestamp, isBreaking),
       }],
     });
 
@@ -268,6 +319,7 @@ export async function POST(request: NextRequest) {
   const startTime = Date.now();
   let postUrl = '';
   let postContent = '';
+  let postTimestamp: string | undefined;
 
   try {
     const body = await request.json();
@@ -291,7 +343,9 @@ export async function POST(request: NextRequest) {
     // SCRAPING
     console.log('Scraping post:', postUrl);
     const scrapeStart = Date.now();
-    postContent = await scrapeXPost(postUrl);
+    const scrapedData = await scrapeXPost(postUrl);
+    postContent = scrapedData.text;
+    postTimestamp = scrapedData.timestamp;
     const scrapeDuration = Date.now() - scrapeStart;
 
     // STAGE 1: CLAIM EXTRACTION
@@ -301,7 +355,7 @@ export async function POST(request: NextRequest) {
 
     // STAGE 2: SOURCE GATHERING
     const sourceStart = Date.now();
-    const sources = await gatherSources(claimExtraction.claims, postContent);
+    const sources = await gatherSources(claimExtraction.claims, postContent, postTimestamp);
     const sourceDuration = Date.now() - sourceStart;
 
     // STAGE 3: EVIDENCE-INFORMED ANALYSIS
@@ -309,7 +363,8 @@ export async function POST(request: NextRequest) {
     const { analysis, tokenUsage } = await analyzeWithEvidence(
       postContent,
       claimExtraction.claims,
-      sources
+      sources,
+      postTimestamp
     );
     const analysisDuration = Date.now() - analysisStart;
 
@@ -333,6 +388,7 @@ export async function POST(request: NextRequest) {
     const result: FactCheckResult = {
       postUrl,
       postContent,
+      postTimestamp,
       claims: claimExtraction.claims,
       analysis,
       sources,
@@ -357,7 +413,7 @@ export async function POST(request: NextRequest) {
       ],
       metadata: {
         scrapeDurationMs: scrapeDuration,
-        analysisDurationMs: claimDuration + analysisStart,
+        analysisDurationMs: analysisDuration,
         searchDurationMs: sourceDuration,
         totalDurationMs: totalDuration,
         anthropicTokensUsed: tokenUsage,

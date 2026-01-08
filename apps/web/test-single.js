@@ -8,7 +8,7 @@ async function testFactCheck(postUrl) {
   const startTime = Date.now();
 
   try {
-    const response = await fetch('http://localhost:3001/api/fact-check-v2', {
+    const response = await fetch('http://localhost:3000/api/fact-check-v2', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
