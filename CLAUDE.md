@@ -16,19 +16,29 @@ x-fact-checker/
 │   └── web/               # Next.js application
 │       ├── app/
 │       │   ├── api/
-│       │   │   ├── fact-check/       # V1 endpoint (legacy)
-│       │   │   ├── fact-check-v2/    # V2 endpoint (current)
+│       │   │   ├── fact-check/       # Legacy endpoint (V1.1)
+│       │   │   ├── verify/           # Agentic endpoint with SSE streaming
 │       │   │   └── logs/
-│       │   └── page.tsx
+│       │   └── page.tsx              # Main UI with SSE event handling
 │       ├── lib/
-│       │   ├── prompts.ts            # Centralized prompt management
+│       │   ├── agent/                # Agentic fact-checking system
+│       │   │   ├── loop.ts           # Two-phase agent orchestration
+│       │   │   ├── tools.ts          # EVIDENCE_TOOLS + VERDICT_TOOL definitions
+│       │   │   ├── executor.ts       # Tool execution handlers
+│       │   │   └── prompts.ts        # Agent system prompt
+│       │   ├── firecrawl/            # Firecrawl API wrapper
+│       │   │   ├── client.ts         # Search & scrape with smart extraction
+│       │   │   └── domains.ts        # Credibility tier definitions
+│       │   ├── cache/                # Redis caching layer
+│       │   │   └── redis.ts          # Upstash Redis client
+│       │   ├── costs/                # Cost tracking
+│       │   │   └── tracker.ts        # API usage & budget tracking
+│       │   ├── prompts.ts            # Legacy prompts
 │       │   ├── types.ts              # TypeScript interfaces
-│       │   ├── source-fetcher.ts     # Article reading & authority scoring
+│       │   ├── source-fetcher.ts     # Legacy source fetching
 │       │   ├── validator.ts          # Analysis validation
 │       │   └── logger.ts
-│       ├── test-v2.js                # Test script for V2 endpoint
-│       ├── compare-v1-v2.js          # Comparison script for V1 vs V2
-│       └── FACT-CHECK-V2.md          # Detailed V2 architecture docs
+│       └── ARCHITECTURE.md           # Detailed architecture docs
 └── packages/
     └── typescript-config/
 ```
@@ -41,14 +51,22 @@ npm install
 ```
 
 ### Development
-```bash
-# Start dev server (runs Turbo, starts Next.js on port 3000)
-npm run dev
 
-# Or run from web app directly
-cd apps/web
-npm run dev
+```bash
+# From apps/web directory:
+npm run dev:status    # Show all running dev servers (ports 3000-3010)
+npm run dev:stop      # Stop all dev servers
+npm run dev           # Start dev server on port 3000
+npx next dev -p 3001  # Start on specific port
 ```
+
+**Multiple instances supported**: Both you and Claude Code can run separate dev servers on different ports (3000-3010).
+
+**For Claude Code**:
+- Check `npm run dev:status` to see what's running
+- Can start servers in background - they'll be tracked with source "claude-code"
+- Use `npm run dev:stop --port XXXX` to stop specific server
+- Prefer using an existing server if one is already running
 
 ### Building
 ```bash
@@ -65,17 +83,14 @@ npm run build
 npm run lint
 ```
 
-### Testing Fact-Check Endpoints
+### Testing Fact-Check Endpoint
 ```bash
-# Test V2 endpoint interactively
-cd apps/web
-node test-v2.js
+# Test via curl (agentic endpoint)
+curl -X POST http://localhost:3000/api/verify \
+  -H "Content-Type: application/json" \
+  -d '{"postUrl": "https://x.com/username/status/123"}'
 
-# Compare V1 vs V2 on same post
-node compare-v1-v2.js
-
-# Test single post programmatically
-node test-single.js
+# Or use the web UI at http://localhost:3000
 ```
 
 ### Code Formatting
@@ -91,9 +106,17 @@ Create `.env.local` in `apps/web/`:
 # Required
 ANTHROPIC_API_KEY=your_api_key_here
 
-# Optional (for source gathering)
+# Source Gathering (at least one recommended)
+# Firecrawl - Preferred for better search quality (https://firecrawl.dev)
+FIRECRAWL_API_KEY=your_firecrawl_api_key
+
+# Google Custom Search - Fallback option
 GOOGLE_API_KEY=your_google_api_key
 GOOGLE_SEARCH_ENGINE_ID=your_search_engine_id
+
+# Caching (optional but recommended)
+UPSTASH_REDIS_REST_URL=your_upstash_redis_url
+UPSTASH_REDIS_REST_TOKEN=your_upstash_redis_token
 
 # Future features (not yet implemented)
 TWITTER_CLIENT_ID=your_twitter_client_id
@@ -103,13 +126,59 @@ NEXTAUTH_SECRET=your_nextauth_secret
 DATABASE_URL=postgresql://user:password@localhost:5432/xfactchecker
 ```
 
-**Note**: The fact-checker works without Google API keys, but source gathering will be limited.
+**Note**: Firecrawl is the preferred search provider for better source quality. Falls back to Google Custom Search if Firecrawl is not configured.
 
 ## Fact-Checking Architecture
 
-### V2 Multi-Stage Pipeline
+### NEW: Agentic Architecture (POST /api/verify)
 
-The current V2 system uses a four-stage evidence-informed pipeline:
+The agentic system uses Claude with tool use in a **two-phase architecture**:
+
+```
+User submits X post
+        ↓
+   Scrape post content
+        ↓
+   ══════════════════════════════════
+   PHASE 1: Evidence Gathering
+   ══════════════════════════════════
+   Agent Loop (Haiku → Sonnet)
+   ┌─────────────────────────────┐
+   │  Evidence Tools:            │
+   │  - search: Web search       │
+   │  - scrape_url: Full content │
+   │  - scrape_multiple: Batch   │
+   │  - conclude: Early exit     │
+   │  - request_clarification    │
+   └─────────────────────────────┘
+   Exit when: conclude called, max iterations, or clarification needed
+        ↓
+   ══════════════════════════════════
+   PHASE 2: Verdict Submission
+   ══════════════════════════════════
+   Single API call (Sonnet)
+   ┌─────────────────────────────┐
+   │  - submit_verdict (forced)  │
+   └─────────────────────────────┘
+        ↓
+   SSE Stream Events → Frontend
+        ↓
+   Final Verdict + Costs
+```
+
+**Key Features:**
+- **Two-Phase Design**: Evidence gathering separated from verdict - guarantees a verdict is always submitted
+- **Model Tiering**: Haiku for first 3 iterations (75% cheaper), Sonnet for analysis/verdict
+- **Prompt Caching**: System prompt and tools cached for 5 min (reduces repeat token costs)
+- **Result Compression**: Search/scrape results compressed in history to prevent token bloat
+- **Smart Extraction**: Keyword-based paragraph extraction (2000 char limit per source)
+- **Cost Tracking**: Budget limit ($0.25 default), tracks Claude/Search/Scrape costs
+- **SSE Streaming**: Real-time updates as agent works
+- **Credibility Tiers**: Sources ranked Tier 1 (gov/academic) > Tier 2 (wire/fact-checkers) > Tier 3 (news)
+
+### Legacy: Multi-Stage Pipeline (POST /api/fact-check)
+
+The V1.1 system uses a multi-stage evidence-informed pipeline:
 
 ```
 1. Scrape Post Content & Extract Timestamp
@@ -140,7 +209,7 @@ The current V2 system uses a four-stage evidence-informed pipeline:
 
 ### Key Architectural Patterns
 
-**Evidence-First Analysis**: Unlike V1 which analyzed content blindly then searched for sources, V2 gathers sources FIRST and provides them to Claude during analysis. This grounds verdicts in actual evidence.
+**Evidence-First Analysis**: Sources are gathered FIRST and provided to Claude during analysis. This grounds verdicts in actual evidence rather than allowing post-hoc rationalization.
 
 **Claim Extraction**: Posts are decomposed into individual verifiable claims, each with its own priority level and search strategy. This enables targeted verification instead of treating posts as monolithic units.
 
@@ -225,63 +294,87 @@ Log format is newline-delimited JSON for easy parsing.
 
 ## API Endpoints
 
-### POST /api/fact-check-v2
-Current production endpoint. See [apps/web/FACT-CHECK-V2.md](apps/web/FACT-CHECK-V2.md) for complete request/response schema.
+### POST /api/verify (Recommended)
+Agentic fact-checking endpoint with SSE streaming. Returns events as the agent works.
 
-### POST /api/fact-check
-Legacy V1 endpoint, kept for comparison/A/B testing.
+**Request:**
+```json
+{ "postUrl": "https://x.com/username/status/123" }
+```
 
-### POST /api/logs
-Endpoint for retrieving logged fact-checks (if implemented).
+**SSE Events:**
+- `status` - Progress updates
+- `post_content` - Scraped post content
+- `thinking` - Agent iteration start
+- `tool_call` - Tool being called
+- `tool_result` - Tool result
+- `verdict` - Final verdict submitted
+- `complete` - Fact-check complete with full result
+
+### POST /api/fact-check (Legacy)
+V1.1 evidence-informed multi-stage pipeline. See [apps/web/ARCHITECTURE.md](apps/web/ARCHITECTURE.md) for details.
 
 ## Common Development Workflows
 
-### Testing a Prompt Change
-1. Modify prompt in [apps/web/lib/prompts.ts](apps/web/lib/prompts.ts)
-2. Start dev server: `npm run dev`
-3. Test with: `node test-v2.js` (from `apps/web/`)
-4. Review logs in `apps/web/logs/fact-checks.jsonl`
-5. Compare with V1 if needed: `node compare-v1-v2.js`
+### Testing Agent Changes
+1. Start dev server: `npm run dev`
+2. Use web UI at http://localhost:3000 or curl the /api/verify endpoint
+3. Watch server logs for iteration details, token usage, and costs
+4. Look for Phase 1/Phase 2 transitions and verdict submission
 
-### Adding a New Claim Type
-1. Update `Claim` interface type field in [apps/web/lib/types.ts](apps/web/lib/types.ts)
-2. Update claim extraction prompt in [apps/web/lib/prompts.ts](apps/web/lib/prompts.ts)
-3. Test extraction on posts containing the new type
+### Modifying Agent Tools
+1. Edit tool definitions in [apps/web/lib/agent/tools.ts](apps/web/lib/agent/tools.ts)
+2. Add handler in [apps/web/lib/agent/executor.ts](apps/web/lib/agent/executor.ts)
+3. Update EVIDENCE_TOOLS or VERDICT_TOOL as needed
+4. Test with posts that would trigger the new tool
 
-### Modifying Validation Rules
-1. Edit `validateAnalysis()` in [apps/web/lib/validator.ts](apps/web/lib/validator.ts)
-2. Test on edge cases
-3. Check that `needsHumanReview` triggers appropriately
+### Adjusting Cost/Performance
+1. Edit DEFAULT_CONFIG in [apps/web/lib/agent/loop.ts](apps/web/lib/agent/loop.ts):
+   - `maxIterations`: More iterations = more thorough but costlier
+   - `maxSearches`: Limit search API calls
+   - `maxCostUsd`: Budget limit before abort
+2. Adjust Haiku/Sonnet cutoff (currently iteration < 3 uses Haiku)
+3. Tune MAX_CONTENT_LENGTH in [apps/web/lib/firecrawl/client.ts](apps/web/lib/firecrawl/client.ts)
 
-### Adding New Authority Tier Sources
-1. Edit `TIER_1_DOMAINS` or `TIER_2_DOMAINS` in [apps/web/lib/source-fetcher.ts](apps/web/lib/source-fetcher.ts)
-2. Optionally add tier-specific logic to `scoreSourceAuthority()`
-3. Test that new domains receive correct scores
+### Adding New Credibility Tiers
+1. Edit [apps/web/lib/firecrawl/domains.ts](apps/web/lib/firecrawl/domains.ts)
+2. Add domains to TIER_1_DOMAINS or TIER_2_DOMAINS
+3. Test that new domains receive correct tier in search results
 
 ## Performance Characteristics
 
-- **V2 Average Duration**: 18-22 seconds
-- **V2 Average Cost**: $0.09 per fact-check
-- **V1 Average Duration**: 8-10 seconds (for comparison)
-- **V1 Average Cost**: $0.055 per fact-check
+### Agentic System (POST /api/verify)
+- **Average Duration**: 35-55 seconds
+- **Average Cost**: $0.08-0.13 per fact-check
+  - Claude: $0.07-0.12 (Haiku + Sonnet combined)
+  - Search: $0.01 (5 searches max)
+  - Scrape: $0.002-0.003 per source
+- **Iterations**: 4-8 evidence gathering + 1 verdict
+- **Guaranteed Verdict**: Two-phase design ensures verdict always submitted
 
-V2 is 2x slower and 64% more expensive, but provides 4-5x better accuracy with significantly reduced hallucination rate.
+### Legacy System (POST /api/fact-check)
+- **Average Duration**: 18-22 seconds
+- **Average Cost**: $0.09-0.10 per fact-check
+- **Accuracy**: Significantly improved through evidence-first approach
+- **Hallucination Rate**: ~10% (estimated)
 
 ## Known Limitations
 
 - No database persistence (uses JSONL logs)
-- No caching layer (planned)
 - No user authentication (planned)
 - No rate limiting (planned)
-- Source gathering limited without Google API keys
 - Some websites block scraping (article reading fails)
 - JavaScript-heavy sites may not parse correctly with Readability
+- Agent may use all iterations on complex multi-part claims
 
 ## Important Notes for AI Assistants
 
-- **NEVER modify prompts without thorough testing** - small changes can drastically affect accuracy
-- **Always update validation rules when changing scoring criteria**
-- **Maintain type safety** - update TypeScript interfaces when changing response structures
-- **Test both endpoints** when making pipeline changes to avoid breaking V1
-- **Check logs** after testing to verify cost and performance impacts
-- **Be aware of Anthropic API rate limits** when running batch tests
+- **Kill existing node processes** before starting new dev server to avoid port conflicts
+- **Watch server logs** for detailed iteration info, model usage (Haiku/Sonnet), and costs
+- **Two-phase architecture**: Evidence gathering (Phase 1) → Forced verdict (Phase 2)
+- **Token optimization**: Results are compressed in conversation history
+- **Cache hit indicators**: Look for 💾 in logs showing prompt cache usage
+- **Model indicators**: 🐇 = Haiku (cheap), 🎭 = Sonnet (analysis)
+- **Maintain type safety** - update TypeScript interfaces when changing tool definitions
+- **Test cost impact** - check final stats in logs for Claude/Search/Scrape breakdown
+- **Be aware of Anthropic API rate limits** when running multiple tests

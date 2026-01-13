@@ -21,7 +21,21 @@
       "Bash(findstr:*)",
       "Bash(node optimize-prompts.js:*)",
       "Bash(npm uninstall:*)",
-      "Bash(gh repo create:*)"
+      "Bash(gh repo create:*)",
+      "Bash(dir:*)",
+      "Bash(npx tsc:*)",
+      "Bash(taskkill:*)",
+      "Bash(timeout /t 8 /nobreak)",
+      "Bash(Remove-Item -Path \"C:\\\\Users\\\\benk0\\\\Projects\\\\X Fact Checker\\\\apps\\\\web\\\\.next\\\\dev\\\\lock\" -Force -ErrorAction SilentlyContinue)",
+      "Bash(Write-Host \"Lock file removed\")",
+      "Bash(npm run dev:status:*)",
+      "Bash(npm run dev:start:*)",
+      "Bash(timeout:*)",
+      "Bash(powershell -Command \"Start-Sleep -Seconds 3; Invoke-WebRequest -Uri http://localhost:3000 -UseBasicParsing | Select-Object -ExpandProperty StatusCode\")",
+      "Bash(powershell -Command:*)",
+      "Bash(npm run dev:stop:*)",
+      "Bash(node test-single.js:*)",
+      "Bash(pkill:*)"
     ]
   }
 }

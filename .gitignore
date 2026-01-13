@@ -45,3 +45,7 @@ yarn-error.log*
 # Logs
 logs/
 *.jsonl
+
+# Temp files
+tmpclaude-*
+nul

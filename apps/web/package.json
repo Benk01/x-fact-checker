@@ -4,13 +4,18 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:status": "node scripts/dev-server.js status",
+    "dev:stop": "node scripts/dev-server.js stop",
+    "dev:stop:all": "node scripts/dev-server.js stop",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",
+    "@mendable/firecrawl-js": "^4.10.0",
     "@mozilla/readability": "^0.6.0",
+    "@upstash/redis": "^1.36.1",
     "axios": "^1.13.2",
     "cheerio": "^1.1.2",
     "jsdom": "^27.4.0",

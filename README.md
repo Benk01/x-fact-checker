@@ -75,16 +75,22 @@ DATABASE_URL=postgresql://user:password@localhost:5432/xfactchecker
 7. Challenge/correction system
 8. Version tracking for fact-checks
 
-## Development Roadmap
+## Development Status
 
 - [x] Monorepo setup with Turborepo
-- [ ] Proof of concept (basic fact-checking)
+- [x] X post scraping implementation
+- [x] Claude API integration (multi-stage evidence-informed pipeline)
+- [x] Google Custom Search integration
+- [x] Claim extraction and prioritization
+- [x] Source authority scoring
+- [x] Validation layer
 - [ ] Database schema and ORM setup
-- [ ] X post scraping implementation
-- [ ] Claude API integration
-- [ ] Google Custom Search integration
 - [ ] Share graphics generation
 - [ ] User authentication (X OAuth)
 - [ ] Rate limiting
 - [ ] Challenge system
 - [ ] Version tracking
+
+## Current Version
+
+**V1.1 (Evidence-Informed)**: Multi-stage pipeline with claim extraction, evidence-first analysis, and automated validation. See [apps/web/ARCHITECTURE.md](apps/web/ARCHITECTURE.md) for details.
