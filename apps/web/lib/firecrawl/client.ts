@@ -178,6 +178,8 @@ export async function scrapeUrl(url: string, keywords?: string[]): Promise<Scrap
   try {
     const result = await client.scrape(url, {
       formats: ['markdown'],
+      onlyMainContent: true,  // Skip sidebars, headers, footers to reduce credit usage
+      timeout: 10000,         // 10s timeout to avoid slow/huge pages
     });
 
     // Result is a Document, check for markdown content

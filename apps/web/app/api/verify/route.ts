@@ -3,9 +3,10 @@
 import { NextRequest } from 'next/server';
 import puppeteer from 'puppeteer';
 import { runFactCheckAgent, type AgentEvent, type AgentConfig } from '@/lib/agent';
+import { type ExtractedXPost } from '@/lib/types';
 
-// Scrape X post content
-async function scrapeXPost(url: string): Promise<{ text: string; timestamp?: string }> {
+// Scrape X post content with enhanced extraction
+async function scrapeXPost(url: string): Promise<ExtractedXPost> {
   let browser;
   try {
     console.log('Launching browser...');
@@ -22,31 +23,137 @@ async function scrapeXPost(url: string): Promise<{ text: string; timestamp?: str
     await page.waitForSelector('article[data-testid="tweet"]', { timeout: 10000 });
 
     const tweetData = await page.evaluate(() => {
-      const tweetElement = document.querySelector('div[data-testid="tweetText"]');
+      const article = document.querySelector('article[data-testid="tweet"]');
+      if (!article) return null;
+
+      // Extract post text
+      const tweetElement = article.querySelector('div[data-testid="tweetText"]');
       let text = tweetElement?.textContent || '';
 
       if (!text) {
-        const article = document.querySelector('article[data-testid="tweet"]');
-        const textDivs = article?.querySelectorAll('div[lang]');
+        const textDivs = article.querySelectorAll('div[lang]');
         if (textDivs && textDivs.length > 0) {
           text = textDivs[0].textContent || '';
         }
       }
 
+      // Extract timestamp
       let timestamp: string | undefined;
-      const timeElement = document.querySelector('article[data-testid="tweet"] time');
+      const timeElement = article.querySelector('time');
       if (timeElement) {
         timestamp = timeElement.getAttribute('datetime') || undefined;
       }
 
-      return { text, timestamp };
+      // Extract author info
+      const userNameContainer = article.querySelector('[data-testid="User-Name"]');
+      let displayName = '';
+      let username = '';
+
+      if (userNameContainer) {
+        // Display name is typically in the first span
+        const displayNameSpan = userNameContainer.querySelector('span');
+        displayName = displayNameSpan?.textContent?.trim() || '';
+
+        // Username is in a link that contains the handle
+        const userLinks = userNameContainer.querySelectorAll('a[href^="/"]');
+        for (const link of userLinks) {
+          const href = link.getAttribute('href');
+          if (href && href.startsWith('/') && !href.includes('/status/')) {
+            username = href.slice(1); // Remove leading /
+            break;
+          }
+        }
+      }
+
+      // Extract images
+      const images: string[] = [];
+      const imageElements = article.querySelectorAll('[data-testid="tweetPhoto"] img');
+      imageElements.forEach((img) => {
+        const src = img.getAttribute('src');
+        if (src && src.includes('pbs.twimg.com')) {
+          images.push(src);
+        }
+      });
+
+      // Extract quoted post
+      let quotedPost: {
+        text: string;
+        author: { username: string; displayName: string };
+        url?: string;
+      } | undefined;
+
+      // Look for quoted tweet (nested article or blockquote)
+      const quotedArticle = article.querySelector('[data-testid="quoteTweet"]') ||
+                           article.querySelector('article article') ||
+                           article.querySelector('[role="blockquote"]');
+
+      if (quotedArticle) {
+        const quotedTextEl = quotedArticle.querySelector('div[data-testid="tweetText"]') ||
+                            quotedArticle.querySelector('div[lang]');
+        const quotedText = quotedTextEl?.textContent?.trim() || '';
+
+        const quotedUserContainer = quotedArticle.querySelector('[data-testid="User-Name"]');
+        let quotedDisplayName = '';
+        let quotedUsername = '';
+
+        if (quotedUserContainer) {
+          const quotedDisplayNameSpan = quotedUserContainer.querySelector('span');
+          quotedDisplayName = quotedDisplayNameSpan?.textContent?.trim() || '';
+
+          const quotedUserLinks = quotedUserContainer.querySelectorAll('a[href^="/"]');
+          for (const link of quotedUserLinks) {
+            const href = link.getAttribute('href');
+            if (href && href.startsWith('/') && !href.includes('/status/')) {
+              quotedUsername = href.slice(1);
+              break;
+            }
+          }
+        }
+
+        // Try to get quoted post URL
+        let quotedUrl: string | undefined;
+        const quotedLink = quotedArticle.querySelector('a[href*="/status/"]');
+        if (quotedLink) {
+          quotedUrl = 'https://x.com' + quotedLink.getAttribute('href');
+        }
+
+        if (quotedText) {
+          quotedPost = {
+            text: quotedText,
+            author: {
+              username: quotedUsername,
+              displayName: quotedDisplayName,
+            },
+            url: quotedUrl,
+          };
+        }
+      }
+
+      return {
+        text,
+        timestamp,
+        author: { username, displayName },
+        images,
+        quotedPost,
+      };
     });
 
-    if (!tweetData.text?.trim()) {
+    if (!tweetData || !tweetData.text?.trim()) {
       throw new Error('Could not extract tweet content');
     }
 
-    return { text: tweetData.text.trim(), timestamp: tweetData.timestamp };
+    return {
+      text: tweetData.text.trim(),
+      timestamp: tweetData.timestamp,
+      author: {
+        username: tweetData.author.username || 'unknown',
+        displayName: tweetData.author.displayName || 'Unknown',
+      },
+      media: {
+        images: tweetData.images || [],
+      },
+      quotedPost: tweetData.quotedPost,
+    };
   } finally {
     if (browser) await browser.close();
   }
@@ -91,15 +198,27 @@ export async function POST(request: NextRequest) {
 
         try {
           // Get post content
+          let extractedPost: ExtractedXPost | null = null;
           let postContent = providedContent;
-          let postTimestamp: string | undefined;
 
           if (!postContent && postUrl) {
             sendEvent('status', { message: 'Scraping post content...' });
-            const scraped = await scrapeXPost(postUrl);
-            postContent = scraped.text;
-            postTimestamp = scraped.timestamp;
-            sendEvent('post_content', { content: postContent, timestamp: scraped.timestamp });
+            extractedPost = await scrapeXPost(postUrl);
+            postContent = extractedPost.text;
+            sendEvent('post_content', {
+              content: extractedPost.text,
+              timestamp: extractedPost.timestamp,
+              author: extractedPost.author,
+              media: extractedPost.media,
+              quotedPost: extractedPost.quotedPost,
+            });
+          } else if (providedContent) {
+            // Create minimal ExtractedXPost for direct content
+            extractedPost = {
+              text: providedContent,
+              author: { username: 'unknown', displayName: 'Unknown' },
+              media: { images: [] },
+            };
           }
 
           // Run agent with event streaming
@@ -113,11 +232,10 @@ export async function POST(request: NextRequest) {
           sendEvent('status', { message: 'Starting fact-check agent...' });
 
           const result = await runFactCheckAgent(
-            postContent,
+            extractedPost!,
             postUrl || 'direct-input',
             config,
-            onEvent,
-            postTimestamp
+            onEvent
           );
 
           // Send final result

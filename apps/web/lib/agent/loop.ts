@@ -5,6 +5,7 @@ import { EVIDENCE_TOOLS, VERDICT_TOOL, type SubmitVerdictInput, type RequestClar
 import { SYSTEM_PROMPT, createUserMessage } from './prompts';
 import { ToolExecutor } from './executor';
 import { CostTracker, type CostBreakdown, type UsageStats } from '../costs/tracker';
+import { type ExtractedXPost } from '../types';
 
 // Agent configuration
 export interface AgentConfig {
@@ -56,11 +57,10 @@ const anthropic = new Anthropic({
 });
 
 export async function runFactCheckAgent(
-  postContent: string,
+  post: ExtractedXPost,
   postUrl: string,
   config: Partial<AgentConfig> = {},
-  onEvent?: AgentEventCallback,
-  postTimestamp?: string
+  onEvent?: AgentEventCallback
 ): Promise<AgentResult> {
   const cfg = { ...DEFAULT_CONFIG, ...config };
 
@@ -76,7 +76,7 @@ export async function runFactCheckAgent(
   const messages: Anthropic.MessageParam[] = [
     {
       role: 'user',
-      content: createUserMessage(postContent, postUrl, postTimestamp),
+      content: createUserMessage(post, postUrl),
     },
   ];
 
@@ -86,7 +86,8 @@ export async function runFactCheckAgent(
   let abortReason: string | undefined;
 
   console.log('\n🤖 Starting fact-check agent...');
-  console.log(`   Post: ${postContent.substring(0, 100)}...`);
+  console.log(`   Post: ${post.text.substring(0, 100)}...`);
+  console.log(`   Author: @${post.author.username}`);
   console.log(`   Config: ${cfg.maxIterations} iterations, ${cfg.maxSearches} searches, $${cfg.maxCostUsd} budget`);
 
   // ========== PHASE 1: Evidence Gathering ==========

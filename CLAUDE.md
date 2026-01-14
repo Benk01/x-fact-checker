@@ -137,7 +137,11 @@ The agentic system uses Claude with tool use in a **two-phase architecture**:
 ```
 User submits X post
         ↓
-   Scrape post content
+   Scrape post content (enhanced)
+   - Post text & timestamp
+   - Author username & display name
+   - Image URLs
+   - Quoted post content & author
         ↓
    ══════════════════════════════════
    PHASE 1: Evidence Gathering
@@ -168,6 +172,7 @@ User submits X post
 
 **Key Features:**
 - **Two-Phase Design**: Evidence gathering separated from verdict - guarantees a verdict is always submitted
+- **Enhanced Post Extraction**: Scrapes author info, images, and quoted posts for richer context
 - **Model Tiering**: Haiku for first 3 iterations (75% cheaper), Sonnet for analysis/verdict
 - **Prompt Caching**: System prompt and tools cached for 5 min (reduces repeat token costs)
 - **Result Compression**: Search/scrape results compressed in history to prevent token bloat
@@ -217,12 +222,18 @@ The V1.1 system uses a multi-stage evidence-informed pipeline:
 
 **Temporal Context**: Post timestamps are extracted and provided to Claude, enabling verification of time-sensitive claims ("X days ago", "recently").
 
+**Enhanced Post Context**: The agent receives rich context including:
+- Author username and display name (`POSTED BY: @username (Display Name)`)
+- Image count indicator (`MEDIA: N images`)
+- Quoted post content with attribution (if present)
+
 **Validation Layer**: Automated quality checks detect verdict-score inconsistencies, hallucinated source citations, and cases needing human review.
 
 ## TypeScript Type System
 
 Core interfaces are defined in [apps/web/lib/types.ts](apps/web/lib/types.ts):
 
+- `ExtractedXPost`: Scraped X post with author, media, quoted post, and timestamp
 - `Claim`: Individual verifiable claim with type, priority, search query
 - `ClaimExtractionResult`: Extracted claims plus post metadata (tone, type)
 - `SourceSnippet`: Search result snippet
@@ -304,7 +315,12 @@ Agentic fact-checking endpoint with SSE streaming. Returns events as the agent w
 
 **SSE Events:**
 - `status` - Progress updates
-- `post_content` - Scraped post content
+- `post_content` - Scraped post content with enhanced data:
+  - `content`: Post text
+  - `timestamp`: ISO timestamp
+  - `author`: `{ username, displayName }`
+  - `media`: `{ images: string[] }`
+  - `quotedPost`: `{ text, author, url }` (if present)
 - `thinking` - Agent iteration start
 - `tool_call` - Tool being called
 - `tool_result` - Tool result

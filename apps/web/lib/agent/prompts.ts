@@ -1,5 +1,7 @@
 // System prompts for the fact-checking agent
 
+import { type ExtractedXPost } from '../types';
+
 export const SYSTEM_PROMPT = `You are a fact-checking agent. Verify claims in social media posts using web search.
 
 ## Process
@@ -39,9 +41,8 @@ Summary: 2-3 sentences, plain language, no jargon
 Explanation: Step-by-step reasoning with source citations`;
 
 export function createUserMessage(
-  postContent: string,
-  postUrl: string,
-  postTimestamp?: string
+  post: ExtractedXPost,
+  postUrl: string
 ): string {
   const currentDate = new Date().toLocaleDateString('en-US', {
     weekday: 'long',
@@ -50,10 +51,10 @@ export function createUserMessage(
     day: 'numeric',
   });
 
-  let temporalContext = `\nCURRENT DATE: ${currentDate}`;
+  let temporalContext = `CURRENT DATE: ${currentDate}`;
 
-  if (postTimestamp) {
-    const postDate = new Date(postTimestamp);
+  if (post.timestamp) {
+    const postDate = new Date(post.timestamp);
     const formattedPostDate = postDate.toLocaleDateString('en-US', {
       weekday: 'long',
       year: 'numeric',
@@ -80,14 +81,32 @@ export function createUserMessage(
     }
   }
 
+  // Build author line
+  const authorLine = `POSTED BY: @${post.author.username} (${post.author.displayName})`;
+
+  // Build media line if images present
+  const mediaLine = post.media.images.length > 0
+    ? `MEDIA: ${post.media.images.length} image${post.media.images.length > 1 ? 's' : ''}`
+    : '';
+
+  // Build quoted post section if present
+  let quotedSection = '';
+  if (post.quotedPost) {
+    quotedSection = `
+QUOTED POST:
+  By: @${post.quotedPost.author.username} (${post.quotedPost.author.displayName})
+  Content: ${post.quotedPost.text}${post.quotedPost.url ? `\n  URL: ${post.quotedPost.url}` : ''}`;
+  }
+
   return `Please fact-check the following X (Twitter) post:
 
 ---
 POST URL: ${postUrl}
-${temporalContext}
+${authorLine}
+${temporalContext}${mediaLine ? '\n' + mediaLine : ''}
 
 POST CONTENT:
-${postContent}
+${post.text}${quotedSection}
 ---
 
 Identify all factual claims and verify them. Use the temporal context above when evaluating time-sensitive claims (e.g., "yesterday", "last week", "recently"). Start by searching for any existing fact-checks of this claim or similar claims.`;
